@@ -1,0 +1,144 @@
+const CHART_COLORS = ["#7c5cff", "#5cd6ff", "#4ade80", "#fbbf24", "#f87171"];
+
+async function fetchJSON(url, opts) {
+  const resp = await fetch(url, opts);
+  if (!resp.ok) throw new Error(`${url} failed: ${resp.status}`);
+  return resp.json();
+}
+
+function renderKpis(summary) {
+  const grid = document.getElementById("kpiGrid");
+  const items = [
+    { label: "Total Orders", value: summary.total_orders.toLocaleString() },
+    { label: "Total Revenue", value: "$" + summary.total_revenue.toLocaleString() },
+    { label: "Avg Order Value", value: "$" + summary.avg_order_value.toFixed(2) },
+    { label: "Unique Customers", value: summary.unique_customers.toLocaleString() },
+  ];
+  grid.innerHTML = items
+    .map((i) => `<div class="kpi-card"><div class="label">${i.label}</div><div class="value">${i.value}</div></div>`)
+    .join("");
+}
+
+let charts = {};
+
+function destroyChart(id) {
+  if (charts[id]) {
+    charts[id].destroy();
+    delete charts[id];
+  }
+}
+
+function renderCategoryChart(data) {
+  destroyChart("category");
+  const ctx = document.getElementById("categoryChart");
+  charts.category = new Chart(ctx, {
+    type: "doughnut",
+    data: {
+      labels: data.map((d) => d.category),
+      datasets: [{ data: data.map((d) => d.revenue), backgroundColor: CHART_COLORS }],
+    },
+    options: {
+      plugins: { legend: { labels: { color: "#e8e8f0" } } },
+    },
+  });
+}
+
+function renderRegionChart(data) {
+  destroyChart("region");
+  const ctx = document.getElementById("regionChart");
+  charts.region = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: data.map((d) => d.region),
+      datasets: [{ label: "Revenue", data: data.map((d) => d.revenue), backgroundColor: "#5cd6ff" }],
+    },
+    options: {
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: "#9494a8" }, grid: { color: "#2a2a3a" } },
+        y: { ticks: { color: "#9494a8" }, grid: { color: "#2a2a3a" } },
+      },
+    },
+  });
+}
+
+function renderTrendChart(data) {
+  destroyChart("trend");
+  const ctx = document.getElementById("trendChart");
+  charts.trend = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: data.map((d) => d.month),
+      datasets: [
+        {
+          label: "Monthly Revenue",
+          data: data.map((d) => d.revenue),
+          borderColor: "#7c5cff",
+          backgroundColor: "rgba(124,92,255,0.15)",
+          fill: true,
+          tension: 0.3,
+        },
+      ],
+    },
+    options: {
+      plugins: { legend: { labels: { color: "#e8e8f0" } } },
+      scales: {
+        x: { ticks: { color: "#9494a8" }, grid: { color: "#2a2a3a" } },
+        y: { ticks: { color: "#9494a8" }, grid: { color: "#2a2a3a" } },
+      },
+    },
+  });
+}
+
+function renderProductsChart(data) {
+  destroyChart("products");
+  const ctx = document.getElementById("productsChart");
+  charts.products = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: data.map((d) => d.product),
+      datasets: [{ label: "Revenue", data: data.map((d) => d.revenue), backgroundColor: "#4ade80" }],
+    },
+    options: {
+      indexAxis: "y",
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: "#9494a8" }, grid: { color: "#2a2a3a" } },
+        y: { ticks: { color: "#9494a8" }, grid: { color: "#2a2a3a" } },
+      },
+    },
+  });
+}
+
+async function loadDashboard() {
+  const status = document.getElementById("status");
+  try {
+    const kpis = await fetchJSON("/api/kpis");
+    renderKpis(kpis.summary);
+    renderCategoryChart(kpis.revenue_by_category);
+    renderRegionChart(kpis.revenue_by_region);
+    renderTrendChart(kpis.monthly_trend);
+    renderProductsChart(kpis.top_products);
+    status.textContent = "";
+  } catch (e) {
+    status.textContent = "No pipeline data yet — click 'Re-run Pipeline' to generate it.";
+  }
+}
+
+document.getElementById("runBtn").addEventListener("click", async () => {
+  const btn = document.getElementById("runBtn");
+  const status = document.getElementById("status");
+  btn.disabled = true;
+  status.textContent = "Running pipeline...";
+  try {
+    await fetchJSON("/api/pipeline/run", { method: "POST" });
+    await loadDashboard();
+    status.textContent = "Pipeline run complete.";
+  } catch (e) {
+    status.textContent = "Pipeline run failed: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+loadDashboard();
