@@ -1,0 +1,90 @@
+"""
+Cleaning and transformation logic for the sales pipeline. Kept separate
+from orchestration (flow.py) so every function here is a pure,
+unit-testable transformation: DataFrame in, DataFrame/dict out.
+"""
+
+import pandas as pd
+
+
+def load_raw_data(path: str) -> pd.DataFrame:
+    return pd.read_csv(path)
+
+
+def clean_data(df: pd.DataFrame) -> pd.DataFrame:
+    """Cleans raw order data:
+    - Drops exact duplicate rows
+    - Normalizes category strings (strip whitespace, title case)
+    - Parses mixed-format order_date strings into a single datetime dtype
+    - Drops rows with missing quantity or unit_price (can't compute revenue
+      without them) and reports how many were dropped
+    """
+    df = df.copy()
+
+    before = len(df)
+    df = df.drop_duplicates()
+    duplicates_removed = before - len(df)
+
+    df["category"] = df["category"].str.strip().str.title()
+
+    # Parse the several date formats generate_data.py mixes together.
+    df["order_date"] = pd.to_datetime(df["order_date"], format="mixed", errors="coerce")
+
+    before = len(df)
+    df = df.dropna(subset=["quantity", "unit_price", "order_date"])
+    nulls_removed = before - len(df)
+
+    df["quantity"] = df["quantity"].astype(int)
+    df["revenue"] = df["quantity"] * df["unit_price"]
+
+    df.attrs["duplicates_removed"] = duplicates_removed
+    df.attrs["nulls_removed"] = nulls_removed
+    return df
+
+
+def revenue_by_category(df: pd.DataFrame) -> pd.DataFrame:
+    result = (
+        df.groupby("category", as_index=False)["revenue"]
+        .sum()
+        .sort_values("revenue", ascending=False)
+        .round(2)
+    )
+    return result
+
+
+def revenue_by_region(df: pd.DataFrame) -> pd.DataFrame:
+    return df.groupby("region", as_index=False)["revenue"].sum().sort_values(
+        "revenue", ascending=False
+    ).round(2)
+
+
+def monthly_revenue_trend(df: pd.DataFrame) -> pd.DataFrame:
+    monthly = df.copy()
+    monthly["month"] = monthly["order_date"].dt.to_period("M").astype(str)
+    result = monthly.groupby("month", as_index=False)["revenue"].sum().sort_values("month")
+    return result.round(2)
+
+
+def top_products(df: pd.DataFrame, n: int = 5) -> pd.DataFrame:
+    result = (
+        df.groupby("product", as_index=False)
+        .agg(units_sold=("quantity", "sum"), revenue=("revenue", "sum"))
+        .sort_values("revenue", ascending=False)
+        .head(n)
+        .round(2)
+    )
+    return result
+
+
+def pipeline_summary(df: pd.DataFrame) -> dict:
+    """High-level KPIs for a dashboard header."""
+    return {
+        "total_orders": int(len(df)),
+        "total_revenue": round(float(df["revenue"].sum()), 2),
+        "avg_order_value": round(float(df["revenue"].mean()), 2),
+        "unique_customers": int(df["customer_id"].nunique()),
+        "date_range": {
+            "start": df["order_date"].min().strftime("%Y-%m-%d"),
+            "end": df["order_date"].max().strftime("%Y-%m-%d"),
+        },
+    }
