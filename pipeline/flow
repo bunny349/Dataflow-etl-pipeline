@@ -1,0 +1,80 @@
+"""
+Prefect flow orchestrating the ETL pipeline: extract raw orders, clean
+them, compute KPI datasets, and persist results as JSON for the API to
+serve. Each step is a Prefect @task, giving retries, logging, and
+observability (via `prefect server start` + the Prefect UI) for free.
+"""
+
+import json
+import os
+
+import pandas as pd
+from prefect import flow, get_run_logger, task
+
+from pipeline.transform import (
+    clean_data,
+    load_raw_data,
+    monthly_revenue_trend,
+    pipeline_summary,
+    revenue_by_category,
+    revenue_by_region,
+    top_products,
+)
+
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+RAW_PATH = os.path.join(DATA_DIR, "raw_orders.csv")
+OUTPUT_PATH = os.path.join(DATA_DIR, "kpis.json")
+
+
+@task(retries=2, retry_delay_seconds=1)
+def extract(path: str = RAW_PATH) -> pd.DataFrame:
+    logger = get_run_logger()
+    df = load_raw_data(path)
+    logger.info(f"Extracted {len(df)} raw rows from {path}")
+    return df
+
+
+@task
+def transform_clean(df: pd.DataFrame) -> pd.DataFrame:
+    logger = get_run_logger()
+    cleaned = clean_data(df)
+    logger.info(
+        f"Cleaned data: dropped {cleaned.attrs.get('duplicates_removed', 0)} duplicates, "
+        f"{cleaned.attrs.get('nulls_removed', 0)} rows with nulls. {len(cleaned)} rows remain."
+    )
+    return cleaned
+
+
+@task
+def compute_kpis(df: pd.DataFrame) -> dict:
+    return {
+        "summary": pipeline_summary(df),
+        "revenue_by_category": revenue_by_category(df).to_dict(orient="records"),
+        "revenue_by_region": revenue_by_region(df).to_dict(orient="records"),
+        "monthly_trend": monthly_revenue_trend(df).to_dict(orient="records"),
+        "top_products": top_products(df).to_dict(orient="records"),
+    }
+
+
+@task
+def load_output(kpis: dict, output_path: str = OUTPUT_PATH) -> str:
+    logger = get_run_logger()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, "w") as f:
+        json.dump(kpis, f, indent=2, default=str)
+    logger.info(f"Wrote KPIs to {output_path}")
+    return output_path
+
+
+@flow(name="sales-etl-pipeline")
+def run_pipeline(raw_path: str = RAW_PATH, output_path: str = OUTPUT_PATH) -> dict:
+    raw = extract(raw_path)
+    cleaned = transform_clean(raw)
+    kpis = compute_kpis(cleaned)
+    load_output(kpis, output_path)
+    return kpis
+
+
+if __name__ == "__main__":
+    result = run_pipeline()
+    print(json.dumps(result["summary"], indent=2))
