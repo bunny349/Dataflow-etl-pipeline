@@ -1,0 +1,86 @@
+"""
+Generates realistic, intentionally messy synthetic e-commerce order data —
+duplicates, nulls, inconsistent casing/whitespace, and mixed date formats —
+so the pipeline has real cleaning work to do (rather than operating on
+already-pristine data, which wouldn't demonstrate anything).
+"""
+
+import random
+from datetime import datetime, timedelta
+
+import pandas as pd
+
+CATEGORIES = ["Electronics", "Clothing", "Home & Kitchen", "Books", "Sports"]
+REGIONS = ["North", "South", "East", "West"]
+PRODUCTS = {
+    "Electronics": ["Wireless Mouse", "USB-C Cable", "Bluetooth Speaker", "Laptop Stand"],
+    "Clothing": ["Cotton T-Shirt", "Denim Jacket", "Running Shoes", "Wool Sweater"],
+    "Home & Kitchen": ["Coffee Maker", "Non-Stick Pan", "Storage Bins", "LED Desk Lamp"],
+    "Books": ["Fiction Novel", "Cookbook", "Biography", "Self-Help Guide"],
+    "Sports": ["Yoga Mat", "Dumbbell Set", "Water Bottle", "Resistance Bands"],
+}
+
+
+def _messy_category(category: str) -> str:
+    """Randomly mangle category casing/whitespace to simulate real-world
+    data entry inconsistency (e.g. from multiple upstream systems)."""
+    variants = [category, category.upper(), category.lower(), f" {category} ", category.strip()]
+    return random.choice(variants)
+
+
+def _messy_date(dt: datetime) -> str:
+    """Randomly format a date in one of several common formats."""
+    formats = ["%Y-%m-%d", "%m/%d/%Y", "%d-%m-%Y", "%Y-%m-%dT%H:%M:%S"]
+    return dt.strftime(random.choice(formats))
+
+
+def generate_raw_orders(n: int = 2000, seed: int = 42) -> pd.DataFrame:
+    """Generates n synthetic orders with realistic messiness: ~3% duplicate
+    rows, ~2% null quantities/prices, inconsistent category casing, and
+    mixed date formats."""
+    random.seed(seed)
+    start_date = datetime(2025, 1, 1)
+
+    rows = []
+    for i in range(n):
+        category = random.choice(CATEGORIES)
+        product = random.choice(PRODUCTS[category])
+        order_date = start_date + timedelta(days=random.randint(0, 364))
+        quantity = random.randint(1, 5)
+        unit_price = round(random.uniform(5, 250), 2)
+
+        rows.append(
+            {
+                "order_id": f"ORD-{i:06d}",
+                "order_date": _messy_date(order_date),
+                "category": _messy_category(category),
+                "product": product,
+                "region": random.choice(REGIONS),
+                "customer_id": f"CUST-{random.randint(1, 400):04d}",
+                "quantity": quantity,
+                "unit_price": unit_price,
+            }
+        )
+
+    df = pd.DataFrame(rows)
+
+    # Inject ~2% null values into quantity/unit_price (simulating missing
+    # data from an upstream source).
+    null_frac = 0.02
+    for col in ["quantity", "unit_price"]:
+        null_idx = df.sample(frac=null_frac, random_state=seed).index
+        df.loc[null_idx, col] = None
+
+    # Inject ~3% duplicate rows (simulating a retry/at-least-once upstream
+    # delivery that wasn't deduplicated).
+    dup_frac = 0.03
+    duplicates = df.sample(frac=dup_frac, random_state=seed)
+    df = pd.concat([df, duplicates], ignore_index=True)
+
+    return df.sample(frac=1, random_state=seed).reset_index(drop=True)  # shuffle
+
+
+if __name__ == "__main__":
+    df = generate_raw_orders()
+    df.to_csv("data/raw_orders.csv", index=False)
+    print(f"Generated {len(df)} raw orders -> data/raw_orders.csv")
