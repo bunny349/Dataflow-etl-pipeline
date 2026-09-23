@@ -1,0 +1,80 @@
+"""
+FastAPI server exposing the pipeline's computed KPIs as JSON, plus an
+endpoint to trigger a fresh pipeline run on demand.
+"""
+
+import json
+import os
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from pipeline.flow import OUTPUT_PATH, run_pipeline
+
+app = FastAPI(title="PipelineViz API", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def _load_kpis() -> dict:
+    if not os.path.exists(OUTPUT_PATH):
+        raise HTTPException(
+            status_code=404,
+            detail="No pipeline output found yet. POST /api/pipeline/run first.",
+        )
+    with open(OUTPUT_PATH) as f:
+        return json.load(f)
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.post("/api/pipeline/run")
+def trigger_pipeline():
+    kpis = run_pipeline()
+    return {"status": "completed", "summary": kpis["summary"]}
+
+
+@app.get("/api/kpis")
+def get_all_kpis():
+    return _load_kpis()
+
+
+@app.get("/api/kpis/summary")
+def get_summary():
+    return _load_kpis()["summary"]
+
+
+@app.get("/api/kpis/revenue-by-category")
+def get_revenue_by_category():
+    return _load_kpis()["revenue_by_category"]
+
+
+@app.get("/api/kpis/revenue-by-region")
+def get_revenue_by_region():
+    return _load_kpis()["revenue_by_region"]
+
+
+@app.get("/api/kpis/monthly-trend")
+def get_monthly_trend():
+    return _load_kpis()["monthly_trend"]
+
+
+@app.get("/api/kpis/top-products")
+def get_top_products():
+    return _load_kpis()["top_products"]
+
+
+# Serve the dashboard frontend as static files (mounted last so /api
+# routes take priority over the catch-all static handler).
+frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
+if os.path.isdir(frontend_dir):
+    app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
