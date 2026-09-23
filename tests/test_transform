@@ -1,0 +1,131 @@
+import pandas as pd
+import pytest
+
+from pipeline.transform import (
+    clean_data,
+    monthly_revenue_trend,
+    pipeline_summary,
+    revenue_by_category,
+    revenue_by_region,
+    top_products,
+)
+
+
+@pytest.fixture
+def messy_df():
+    """A small, hand-crafted DataFrame with the exact kinds of messiness
+    the real pipeline needs to handle: duplicates, nulls, inconsistent
+    category casing/whitespace, and mixed date formats."""
+    data = {
+        "order_id": ["A1", "A2", "A3", "A3", "A4", "A5"],  # A3 duplicated
+        "order_date": ["2025-01-15", "01/16/2025", "16-01-2025", "16-01-2025", "2025-01-17", "2025-01-18"],
+        "category": ["Electronics", "ELECTRONICS", " electronics ", " electronics ", "Books", "Books"],
+        "product": ["Mouse", "Mouse", "Cable", "Cable", "Novel", "Novel"],
+        "region": ["North", "North", "South", "South", "East", "West"],
+        "customer_id": ["C1", "C2", "C3", "C3", "C4", "C5"],
+        "quantity": [2, 1, None, None, 3, 1],  # one row has null quantity
+        "unit_price": [10.0, 10.0, 5.0, 5.0, 20.0, None],  # one row has null price
+    }
+    return pd.DataFrame(data)
+
+
+def test_clean_data_removes_exact_duplicates(messy_df):
+    cleaned = clean_data(messy_df)
+    # A3's two rows are identical -> drop_duplicates removes one immediately.
+    # The remaining A3 row still has null quantity, so it's dropped too.
+    assert "A3" not in cleaned["order_id"].values
+
+
+def test_clean_data_normalizes_category_casing(messy_df):
+    cleaned = clean_data(messy_df)
+    categories = cleaned["category"].unique()
+    assert "Electronics" in categories
+    assert "ELECTRONICS" not in categories
+    assert " electronics " not in categories
+
+
+def test_clean_data_parses_mixed_date_formats(messy_df):
+    cleaned = clean_data(messy_df)
+    assert pd.api.types.is_datetime64_any_dtype(cleaned["order_date"])
+
+
+def test_clean_data_drops_rows_with_null_quantity_or_price(messy_df):
+    cleaned = clean_data(messy_df)
+    assert cleaned["quantity"].isnull().sum() == 0
+    assert cleaned["unit_price"].isnull().sum() == 0
+    # A5 has null unit_price -> should be dropped.
+    assert "A5" not in cleaned["order_id"].values
+
+
+def test_clean_data_computes_revenue_column(messy_df):
+    cleaned = clean_data(messy_df)
+    row = cleaned[cleaned["order_id"] == "A1"].iloc[0]
+    assert row["revenue"] == 2 * 10.0
+
+
+def test_clean_data_tracks_removal_counts(messy_df):
+    cleaned = clean_data(messy_df)
+    assert cleaned.attrs["duplicates_removed"] == 1
+    assert cleaned.attrs["nulls_removed"] >= 1
+
+
+@pytest.fixture
+def clean_df():
+    data = {
+        "order_id": ["1", "2", "3", "4"],
+        "order_date": pd.to_datetime(["2025-01-01", "2025-01-15", "2025-02-01", "2025-02-10"]),
+        "category": ["Electronics", "Electronics", "Books", "Books"],
+        "product": ["Mouse", "Cable", "Novel", "Cookbook"],
+        "region": ["North", "South", "East", "West"],
+        "customer_id": ["C1", "C2", "C1", "C3"],
+        "quantity": [2, 1, 3, 1],
+        "unit_price": [10.0, 5.0, 20.0, 15.0],
+    }
+    df = pd.DataFrame(data)
+    df["revenue"] = df["quantity"] * df["unit_price"]
+    return df
+
+
+def test_revenue_by_category_sums_correctly(clean_df):
+    result = revenue_by_category(clean_df)
+    electronics_revenue = result[result["category"] == "Electronics"]["revenue"].iloc[0]
+    assert electronics_revenue == (2 * 10.0) + (1 * 5.0)
+
+
+def test_revenue_by_category_sorted_descending(clean_df):
+    result = revenue_by_category(clean_df)
+    revenues = result["revenue"].tolist()
+    assert revenues == sorted(revenues, reverse=True)
+
+
+def test_revenue_by_region_sums_correctly(clean_df):
+    result = revenue_by_region(clean_df)
+    north_revenue = result[result["region"] == "North"]["revenue"].iloc[0]
+    assert north_revenue == 20.0
+
+
+def test_monthly_revenue_trend_groups_by_month(clean_df):
+    result = monthly_revenue_trend(clean_df)
+    months = result["month"].tolist()
+    assert months == ["2025-01", "2025-02"]
+
+
+def test_top_products_respects_limit(clean_df):
+    result = top_products(clean_df, n=2)
+    assert len(result) == 2
+
+
+def test_top_products_sorted_by_revenue(clean_df):
+    result = top_products(clean_df, n=4)
+    revenues = result["revenue"].tolist()
+    assert revenues == sorted(revenues, reverse=True)
+
+
+def test_pipeline_summary_has_expected_keys(clean_df):
+    summary = pipeline_summary(clean_df)
+    assert summary["total_orders"] == 4
+    assert summary["unique_customers"] == 3  # C1 appears twice
+    assert summary["total_revenue"] == clean_df["revenue"].sum()
+    assert "date_range" in summary
+    assert summary["date_range"]["start"] == "2025-01-01"
+    assert summary["date_range"]["end"] == "2025-02-10"
