@@ -1,0 +1,41 @@
+from fastapi.testclient import TestClient
+
+from api.main import app
+
+client = TestClient(app)
+
+
+def test_health():
+    resp = client.get("/api/health")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+
+
+def test_kpis_endpoint_returns_expected_structure():
+    # Assumes the pipeline has been run at least once (data/kpis.json exists),
+    # which is true in CI since the workflow runs the pipeline before tests.
+    resp = client.get("/api/kpis")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "summary" in data
+    assert "revenue_by_category" in data
+    assert "monthly_trend" in data
+
+
+def test_revenue_by_category_endpoint():
+    resp = client.get("/api/kpis/revenue-by-category")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    if data:
+        assert "category" in data[0]
+        assert "revenue" in data[0]
+
+
+def test_summary_endpoint_has_expected_fields():
+    resp = client.get("/api/kpis/summary")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "total_orders" in data
+    assert "total_revenue" in data
+    assert "unique_customers" in data
