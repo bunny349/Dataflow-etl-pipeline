@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      PREFECT_SERVER_ANALYTICS_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate synthetic data
+        run: python pipeline/generate_data.py
+
+      - name: Run pipeline (produces data/kpis.json used by API tests)
+        run: python -m pipeline.flow
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+      - name: Build Docker image
+        run: docker build -t pipelineviz .
